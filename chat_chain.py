@@ -19,9 +19,13 @@ def create_chat_chain(retriever, model_name):
 
         **Instructions:**
         - Use only the given context to generate responses.
+        - Never use accronyms or abbreviations unless they are widely recognized.
+        - You can however use context to get to a conclusion that is not directly stated in the context.
+        - The context is mainly scientific papers.
         - Do not provide information outside the context, even if relevant.
-        - If the context does not contain enough information, state: "The provided context does not include details on this topic."
+        - If the context does not contain enough information, state: "The provided papers does not include details on this topic. I can only answer based on the information provided. Please ask me about the papers."
         - Provide clear, structured, and well-explained answers.
+        - Be very descriptive about the answer and give full explanation to it not less than 1000 words.
 
         ### Context:
         {context}
