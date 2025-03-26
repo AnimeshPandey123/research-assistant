@@ -1,11 +1,11 @@
 import os
 import time
-import arxiv
 import streamlit as st
-from langchain.document_loaders import DirectoryLoader, PyPDFLoader
+from langchain.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import Qdrant
-from langchain.embeddings import GPT4AllEmbeddings
+from langchain.embeddings import GPT4AllEmbeddings, HuggingFaceEmbeddings
+
 from langchain_ollama import OllamaLLM
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
@@ -15,15 +15,14 @@ from langchain.prompts import PromptTemplate
 
 
 def download_pdf(url, dirpath):
+    """Download a PDF file from a URL and save it to a directory"""
     response = requests.get(url)
-    # response.raise_for_status()
 
     if response.status_code != 200:
         print(f"Failed to download {url}. Status code: {response.status_code}")
         return None
     
     os.makedirs(dirpath, exist_ok=True)
-
     
     # Extract filename from URL
     filename = os.path.basename(url)
@@ -39,73 +38,82 @@ def download_pdf(url, dirpath):
     return file_path  # Return the saved file path
 
 
-
 def fetch_papers(query, max_results=10, progress_bar=None):
-    """Fetch papers from arXiv based on the query"""
-    results = search_arxiv_papers(query=query,index_name="arxiv_v1", size=max_results)    
+    """Fetch paper metadata from arXiv based on the query (without downloading PDFs)"""
+    results = search_arxiv_papers(query=query, index_name="arxiv_v1", size=max_results)    
     paper_info = []
     dirpath = f"papers/arxiv_papers_{query.replace(' ', '_')}"
+    
+    # Ensure the directory exists
+    os.makedirs(dirpath, exist_ok=True)
 
     for i, result in enumerate(results['results']):
         if progress_bar:
-            progress_bar.progress(min((i + 0.5) / len(results), 1.0))
+            progress_bar.progress(min((i + 1) / len(results['results']), 1.0))
             
-        while True:
-            try:
-                url = result['url']
-
-                filename =download_pdf(url=url, dirpath=dirpath)
-                if filename:
-                    # Extract just the filename without path
-                    base_filename = os.path.basename(filename)
-                    paper_info.append({
-                        "title": result['title'],
-                        "year": result['year'],
-                        "authors": result['authors'],
-                        "filename": base_filename,
-                        "path": filename,
-                        "processed": False
-                    })
-                break
-            except (FileNotFoundError, ConnectionResetError) as e:
-                st.error(f"Error downloading paper: {e}")
-                time.sleep(2)
-                
-        if progress_bar:
-            progress_bar.progress(min((i + 0.5) / len(results), 1.0))
+        # Store paper metadata without downloading
+        paper_info.append({
+            "title": result['title'],
+            "year": result['year'],
+            "authors": result['authors'],
+            "url": result['url'],
+            "path": None,  # Path will be populated when downloaded
+            "processed": False,
+            "downloaded": False
+        })
     
     return dirpath, paper_info
 
 
-def process_paper(paper_path, query, existing_retriever=None):
-    """Process a single paper and add it to the retriever"""
-    collection_name = f"arxiv_{query.replace(' ', '_')}"
-    collection_path = f"./tmp/{collection_name}"
+def download_and_process_paper(paper_info, dirpath, query, existing_retriever=None):
+    """Download a paper and add it to the retriever"""
+    # Download the paper if not already downloaded
+    if not paper_info["downloaded"]:
+        try:
+            file_path = download_pdf(paper_info["url"], dirpath)
+            if not file_path:
+                return None, "Failed to download the paper."
+            
+            paper_info["path"] = file_path
+            paper_info["downloaded"] = True
+            # Extract just the filename without path
+            paper_info["filename"] = os.path.basename(file_path)
+        except Exception as e:
+            return None, f"Error downloading paper: {str(e)}"
     
-    # Load the paper
-    loader = PyPDFLoader(paper_path)
-    pages = loader.load()
-    paper_text = " ".join(page.page_content for page in pages if page.page_content)
-    
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-    paper_chunks = text_splitter.create_documents([paper_text])
+    # Process the paper and add to retriever
+    try:
+        collection_name = f"arxiv_{query.replace(' ', '_')}"
+        collection_path = f"./tmp/{collection_name}"
+        
+        # Load the paper
+        loader = PyPDFLoader(paper_info["path"])
+        pages = loader.load()
+        paper_text = " ".join(page.page_content for page in pages if page.page_content)
+        
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+        paper_chunks = text_splitter.create_documents([paper_text])
 
-    # Create a new retriever or add to existing one
-    if existing_retriever is None:
-        qdrant = Qdrant.from_documents(
-            documents=paper_chunks,
-            embedding=GPT4AllEmbeddings(),
-            path=collection_path,
-            collection_name=collection_name
-        )
-        return qdrant.as_retriever()
-    else:
-        # Get the underlying vectorstore
-        vectorstore = existing_retriever.vectorstore
-        # Add new documents
-        vectorstore.add_documents(paper_chunks)
-        # Return the existing retriever (now updated)
-        return existing_retriever
+        # Create a new retriever or add to existing one
+        if existing_retriever is None:
+            qdrant = Qdrant.from_documents(
+                documents=paper_chunks,
+                embedding=GPT4AllEmbeddings(),
+                path=collection_path,
+                # location=":memory:", 
+                collection_name=collection_name,
+                force_recreate=True
+            )
+            return qdrant.as_retriever(), None
+        else:
+            # Get the underlying vectorstore
+            vectorstore = existing_retriever.vectorstore
+            # Add new documents
+            vectorstore.add_documents(paper_chunks)
+            # Return the existing retriever (now updated)
+            return existing_retriever, None
+    except Exception as e:
+        return None, f"Error processing paper: {str(e)}"
 
 
 def create_chat_chain(retriever, model_name):
@@ -119,15 +127,17 @@ def create_chat_chain(retriever, model_name):
     
     # Create a custom prompt template that instructs the model to be accurate and stay within context
     prompt_template = """
-    Answer the question based ONLY on the following context. If you don't know the answer or the information is not in the context, say "I don't have enough information in the papers to answer this question" instead of making up an answer.
+        You must answer the question strictly based on the given context. Provide a detailed and well-explained response.
+        ### Context:  
+        {context}  
 
-    Context: {context}
-    
-    Chat History: {chat_history}
-    
-    Question: {question}
-    
-    Answer:
+        ### Chat History:  
+        {chat_history}  
+
+        ### Question:  
+        {question}  
+
+        ### Answer:  
     """
     
     # Create the prompt
@@ -140,7 +150,7 @@ def create_chat_chain(retriever, model_name):
         llm=llm,
         retriever=retriever,
         memory=memory,
-        combine_docs_chain_kwargs={"prompt": qa_prompt},
+        # combine_docs_chain_kwargs={"prompt": qa_prompt},
         verbose=False,
     )
     
@@ -163,6 +173,8 @@ def main():
         st.session_state.paper_info = []
     if "topic" not in st.session_state:
         st.session_state.topic = ""
+    if "dirpath" not in st.session_state:
+        st.session_state.dirpath = ""
     if "processed_papers" not in st.session_state:
         st.session_state.processed_papers = []
     if "retriever" not in st.session_state:
@@ -179,7 +191,7 @@ def main():
         st.header("Configuration")
         model_name = st.selectbox(
             "Select Ollama Model:",
-            ["mistral", "phi3:14b", "llama3.1:8b", "llama3.2:latest", "deepseek-r1"],
+            ["deepseek-r1", "phi3:14b", "llama3.1:8b", "llama3.2:latest", "mistral"],
             index=0
         )
         
@@ -207,7 +219,8 @@ def main():
         This app allows you to search for research papers on arXiv and ask questions about them.
         The papers are processed using LangChain and indexed for quick retrieval.
         
-        You can select which papers to include in your QA system one at a time and have a continuous conversation about their contents.
+        Papers are only downloaded when you select them for processing, saving bandwidth and storage.
+        You can have a continuous conversation about their contents after adding them to your knowledge base.
         """)
     
     # Create a container for the main interface
@@ -233,10 +246,11 @@ def main():
         with st.spinner(f"Fetching papers on '{search_query}'..."):
             progress_bar = st.progress(0)
             
-            # Fetch papers
+            # Fetch papers (metadata only)
             try:
                 dirpath, paper_info = fetch_papers(search_query, max_results=max_papers, progress_bar=progress_bar)
                 st.session_state.paper_info = paper_info
+                st.session_state.dirpath = dirpath
             except Exception as e:
                 st.error(f"An error occurred: {str(e)}")
             finally:
@@ -246,7 +260,7 @@ def main():
     if st.session_state.paper_info:
         with main_container:
             st.subheader(f"📄 Papers on '{st.session_state.topic}'")
-            st.write("Select and process papers one by one to add to your knowledge base:")
+            st.write("Select papers to download and add to your knowledge base:")
             
             # List papers with process buttons
             for i, paper in enumerate(st.session_state.paper_info):
@@ -258,28 +272,37 @@ def main():
                     if paper["processed"]:
                         st.success("✅ Added to KB")
                     else:
-                        if st.button(f"Process Paper", key=f"process_btn_{i}"):
-                            with st.spinner(f"Processing '{paper['title']}'..."):
-                                # Process this paper
-                                st.session_state.retriever = process_paper(
-                                    paper["path"],
+                        button_text = "Download & Process"
+                        if paper.get("downloaded", False):
+                            button_text = "Process Paper"
+                            
+                        if st.button(button_text, key=f"process_btn_{i}"):
+                            with st.spinner(f"{'Downloading and processing' if not paper.get('downloaded', False) else 'Processing'} '{paper['title']}'..."):
+                                # Download and process this paper
+                                retriever, error = download_and_process_paper(
+                                    st.session_state.paper_info[i],
+                                    st.session_state.dirpath,
                                     st.session_state.topic,
                                     st.session_state.retriever
                                 )
                                 
-                                # Update paper status
-                                st.session_state.paper_info[i]["processed"] = True
-                                st.session_state.processed_papers.append(i)
-                                
-                                # Create or update chat chain
-                                st.session_state.chat_chain = create_chat_chain(
-                                    st.session_state.retriever,
-                                    model_name
-                                )
-                                st.session_state.processing_complete = True
-                                st.success(f"Added '{paper['title']}' to your knowledge base")
-                                # Force a rerun to update UI
-                                st.rerun()
+                                if error:
+                                    st.error(error)
+                                else:
+                                    # Update retriever and paper status
+                                    st.session_state.retriever = retriever
+                                    st.session_state.paper_info[i]["processed"] = True
+                                    st.session_state.processed_papers.append(i)
+                                    
+                                    # Create or update chat chain
+                                    st.session_state.chat_chain = create_chat_chain(
+                                        st.session_state.retriever,
+                                        model_name
+                                    )
+                                    st.session_state.processing_complete = True
+                                    st.success(f"Added '{paper['title']}' to your knowledge base")
+                                    # Force a rerun to update UI
+                                    st.rerun()
     
     # Chat interface section
     if st.session_state.processed_papers:
@@ -334,7 +357,7 @@ def main():
             st.info("👆 Enter a research topic above to get started.")
     elif not st.session_state.processed_papers and st.session_state.paper_info:
         with main_container:
-            st.info("👆 Process at least one paper to start asking questions.")
+            st.info("👆 Select a paper to download and process it to start asking questions.")
 
 
 if __name__ == "__main__":
