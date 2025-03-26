@@ -45,14 +45,14 @@ def fetch_papers(query, max_results=10, progress_bar=None):
         while True:
             try:
                 url = result['url']
-                filename = download_pdf(url=url, dirpath=dirpath)
-                base_filename = os.path.basename(filename)
+                # filename = download_pdf(url=url, dirpath=dirpath)
+                # base_filename = os.path.basename(filename)
                 paper_info.append({
                     "title": result['title'],
                     "year": result['year'],
                     "authors": result['authors'],
-                    "filename": base_filename,
-                    "path": filename,
+                    "filename": '',
+                    "path": '',
                     "processed": False,
                     "downloaded": False,
                     "url": url
