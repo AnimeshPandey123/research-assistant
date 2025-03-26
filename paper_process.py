@@ -2,6 +2,10 @@ import os
 import time
 import requests
 from search import search_arxiv_papers
+from langchain.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.vectorstores import Qdrant
+from langchain.embeddings import GPT4AllEmbeddings
 
 def download_pdf(url, dirpath):
     print(f"Checking PDF at {url}...")
@@ -36,7 +40,7 @@ def fetch_papers(query, max_results=10, progress_bar=None):
     
     for i, result in enumerate(results['results']):
         if progress_bar:
-            progress_bar.progress((i + 0.5) / len(results))
+            progress_bar.progress(min(round((i + 1) / len(results['results']), 2), 1.0))
         
         while True:
             try:
@@ -49,7 +53,9 @@ def fetch_papers(query, max_results=10, progress_bar=None):
                     "authors": result['authors'],
                     "filename": base_filename,
                     "path": filename,
-                    "processed": False
+                    "processed": False,
+                    "downloaded": False,
+                    "url": url
                 })
                 break
             except (FileNotFoundError, ConnectionResetError) as e:
@@ -57,7 +63,56 @@ def fetch_papers(query, max_results=10, progress_bar=None):
                 time.sleep(2)
         
         if progress_bar:
-            progress_bar.progress((i + 1) / len(results))
+            progress_bar.progress(min(round((i + 1) / len(results['results']), 2), 1.0))
     
     print(f"Fetched {len(paper_info)} papers and saved to {dirpath}")
     return dirpath, paper_info
+
+def download_and_process_paper(paper_info, dirpath, query, existing_retriever=None):
+    """Download a paper and add it to the retriever"""
+    # Download the paper if not already downloaded
+    if not paper_info["downloaded"]:
+        try:
+            file_path = download_pdf(paper_info["url"], dirpath)
+            if not file_path:
+                return None, "Failed to download the paper."
+            
+            paper_info["path"] = file_path
+            paper_info["downloaded"] = True
+            # Extract just the filename without path
+            paper_info["filename"] = os.path.basename(file_path)
+        except Exception as e:
+            return None, f"Error downloading paper: {str(e)}"
+    
+    # Process the paper and add to retriever
+    try:
+        collection_name = f"arxiv_{query.replace(' ', '_')}"
+        collection_path = f"./tmp/{collection_name}"
+        
+        # Load the paper
+        loader = PyPDFLoader(paper_info["path"])
+        pages = loader.load()
+        paper_text = " ".join(page.page_content for page in pages if page.page_content)
+        
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+        paper_chunks = text_splitter.create_documents([paper_text])
+
+        # Create a new retriever or add to existing one
+        if existing_retriever is None:
+            qdrant = Qdrant.from_documents(
+                documents=paper_chunks,
+                embedding=GPT4AllEmbeddings(),
+                path=collection_path,
+                collection_name=collection_name,
+                force_recreate=True
+            )
+            return qdrant.as_retriever(), None
+        else:
+            # Get the underlying vectorstore
+            vectorstore = existing_retriever.vectorstore
+            # Add new documents
+            vectorstore.add_documents(paper_chunks)
+            # Return the existing retriever (now updated)
+            return existing_retriever, None
+    except Exception as e:
+        return None, f"Error processing paper: {str(e)}"
