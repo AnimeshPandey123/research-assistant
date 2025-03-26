@@ -105,7 +105,43 @@ def main():
     if st.session_state.paper_info:
         with main_container:
             st.subheader(f"📄 Papers on '{st.session_state.topic}'")
+            
+            # Add Select All button
+            col_select_all, col_space = st.columns([1, 3])
+            with col_select_all:
+                select_all = st.button("Download and Process All Papers", type="primary")
+            
             st.write("Select papers to download and add to your knowledge base:")
+            
+            # Handle Select All functionality
+            if select_all:
+                for i, paper in enumerate(st.session_state.paper_info):
+                    if not paper["processed"]:
+                        with st.spinner(f"Downloading and processing '{paper['title']}'..."):
+                            retriever, error = download_and_process_paper(
+                                st.session_state.paper_info[i],
+                                st.session_state.dirpath,
+                                st.session_state.topic,
+                                st.session_state.retriever
+                            )
+                            
+                            if error:
+                                st.error(error)
+                            else:
+                                # Update retriever and paper status
+                                st.session_state.retriever = retriever
+                                st.session_state.paper_info[i]["processed"] = True
+                                st.session_state.processed_papers.append(i)
+                                
+                                # Create or update chat chain
+                                st.session_state.chat_chain = create_chat_chain(
+                                    st.session_state.retriever,
+                                    model_name
+                                )
+                                st.session_state.processing_complete = True
+                
+                st.success(f"Downloaded and processed {len(st.session_state.paper_info)} papers.")
+                st.rerun()
             
             # List papers with process buttons
             for i, paper in enumerate(st.session_state.paper_info):
