@@ -36,7 +36,7 @@ def main():
         st.header("Configuration")
         model_name = st.selectbox(
             "Select Ollama Model:",
-            [ "phi3:14b", "llama3.1:8b", "deepseek-r1", "llama3.2:latest", "mistral"],
+            [ "phi4", "phi3:14b", "llama3.1:8b", "deepseek-r1", "llama3.2:latest", "mistral"],
             index=0
         )
         
