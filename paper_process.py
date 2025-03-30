@@ -104,7 +104,11 @@ def download_and_process_paper(paper_info, dirpath, query, existing_retriever=No
                 embedding=GPT4AllEmbeddings(),
                 path=collection_path,
                 collection_name=collection_name,
-                force_recreate=True
+                force_recreate=True,
+                metadata=[
+                    {"title": paper_info["title"], "year": paper_info["year"], 
+                    "authors": paper_info["authors"]}
+                ]
             )
             return qdrant.as_retriever(), None
         else:
