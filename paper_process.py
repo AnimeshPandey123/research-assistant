@@ -6,6 +6,10 @@ from langchain.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import Qdrant
 from langchain.embeddings import GPT4AllEmbeddings
+from langchain.embeddings import HuggingFaceEmbeddings
+
+embedding=HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2"),
+
 
 def download_pdf(url, dirpath):
     print(f"Checking PDF at {url}...")
@@ -33,7 +37,7 @@ def download_pdf(url, dirpath):
 
 def fetch_papers(query, max_results=10, progress_bar=None):
     print(f"Fetching papers for query: {query}...")
-    results = search_arxiv_papers(query=query, index_name="arxiv_v1", size=max_results)    
+    results = search_arxiv_papers(query=query, index_name="arxiv", size=max_results)    
     paper_info = []
     dirpath = f"papers/arxiv_papers_{query.replace(' ', '_')}"
     os.makedirs(dirpath, exist_ok=True)
@@ -101,7 +105,7 @@ def download_and_process_paper(paper_info, dirpath, query, existing_retriever=No
         if existing_retriever is None:
             qdrant = Qdrant.from_documents(
                 documents=paper_chunks,
-                embedding=GPT4AllEmbeddings(),
+                embedding=HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2"),
                 path=collection_path,
                 collection_name=collection_name,
                 force_recreate=True,
