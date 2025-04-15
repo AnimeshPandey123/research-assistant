@@ -147,7 +147,10 @@ def main():
             for i, paper in enumerate(st.session_state.paper_info):
                 col1, col2 = st.columns([3, 1])
                 with col1:
-                    st.write(f"**{paper['title']}** ({paper['year']}) - {paper['authors']}")
+                    st.markdown(
+                        f"[**{paper['title']}**]({paper['url']}) ({paper['year']}) - {paper['authors']}",
+                        unsafe_allow_html=True
+                    )
                 with col2:
                     # Show status or process button
                     if paper["processed"]:
@@ -222,15 +225,17 @@ def main():
                     with st.spinner("Thinking..."):
                         try:
                             response = st.session_state.chat_chain.invoke({"question": user_question})
+                            # Show the retrieved context
+
                             answer = response.get("answer", "I couldn't find an answer to that question in the papers.")
                             message_placeholder.markdown(answer)
                             
                             # Add assistant response to chat history
-                            st.session_state.messages.append({"role": "assistant", "content": answer})
+                            st.session_state.messages.append({"role": "researcher", "content": answer})
                         except Exception as e:
                             error_msg = f"An error occurred: {str(e)}"
                             message_placeholder.error(error_msg)
-                            st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                            st.session_state.messages.append({"role": "researcher", "content": error_msg})
     
     # Initial guidance
     if not st.session_state.paper_info and not search_button:

@@ -25,7 +25,7 @@ def create_chat_chain(retriever, model_name):
         - Do not provide information outside the context, even if relevant.
         - If the context does not contain enough information, state: "The provided papers does not include details on this topic. I can only answer based on the information provided. Please ask me about the papers."
         - Provide clear, structured, and well-explained answers.
-        - Be very descriptive about the answer and give full explanation to it not less than 1000 words.
+        - Be very descriptive about the answer and give full explanation.
 
         ### Context:
         {context}
@@ -51,7 +51,7 @@ def create_chat_chain(retriever, model_name):
         retriever=retriever,
         memory=memory,
         combine_docs_chain_kwargs={"prompt": qa_prompt},
-        verbose=False,
+        verbose=True,
     )
-    
+
     return chain
