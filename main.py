@@ -2,6 +2,7 @@ import os
 import streamlit as st
 from paper_process import fetch_papers, download_and_process_paper
 from chat_chain import create_chat_chain
+import re
 
 def main():
     st.set_page_config(
@@ -36,7 +37,7 @@ def main():
         st.header("Configuration")
         model_name = st.selectbox(
             "Select Ollama Model:",
-            [ "phi4", "phi3:14b", "llama3.1:8b", "deepseek-r1", "llama3.2:latest", "mistral"],
+            [ "qwen3:14b","phi4", "phi3:14b", "llama3.1:8b", "deepseek-r1", "llama3.2:latest", "mistral"],
             index=0
         )
         
@@ -206,7 +207,14 @@ def main():
             with chat_container:
                 for message in st.session_state.messages:
                     with st.chat_message(message["role"]):
-                        st.markdown(message["content"])
+                        if message["role"] == "researcher" and "reasoning" in message:
+                            # Add expandable section for reasoning
+                            with st.expander("View Reasoning", expanded=False):
+                                st.markdown(message["reasoning"])
+                            # Display the answer without reasoning first
+                            st.markdown(message["content"])
+                        else:
+                            st.markdown(message["content"])
             
             # Chat input
             user_question = st.chat_input("Ask a question about the papers...")
@@ -225,13 +233,39 @@ def main():
                     with st.spinner("Thinking..."):
                         try:
                             response = st.session_state.chat_chain.invoke({"question": user_question})
-                            # Show the retrieved context
-
-                            answer = response.get("answer", "I couldn't find an answer to that question in the papers.")
+                            # Extract reasoning from response if available
+                            full_answer = response.get("answer", "I couldn't find an answer to that question in the papers.")
+                            
+                            # Check for thinking tags in the response
+                            reasoning = None
+                            answer = full_answer
+                            
+                            # Try to extract <think>...</think> content from the answer
+                            think_match = re.search(r'<think>(.*?)</think>', full_answer, re.DOTALL)
+                            if think_match:
+                                reasoning = think_match.group(1).strip()
+                                # Remove the thinking section from the displayed answer
+                                answer = re.sub(r'<think>.*?</think>', '', full_answer, flags=re.DOTALL).strip()
+                            
+                            # Display the clean answer
                             message_placeholder.markdown(answer)
                             
-                            # Add assistant response to chat history
-                            st.session_state.messages.append({"role": "researcher", "content": answer})
+                            # Add assistant response to chat history with reasoning if available
+                            message_data = {
+                                "role": "researcher", 
+                                "content": answer
+                            }
+                            
+                            if reasoning:
+                                message_data["reasoning"] = reasoning
+                                
+                            st.session_state.messages.append(message_data)
+                            
+                            # If reasoning was extracted, show the expander
+                            if reasoning:
+                                with st.expander("View Reasoning", expanded=False):
+                                    st.markdown(reasoning)
+                                    
                         except Exception as e:
                             error_msg = f"An error occurred: {str(e)}"
                             message_placeholder.error(error_msg)
